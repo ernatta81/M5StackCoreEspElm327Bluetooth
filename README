@@ -1,0 +1,15 @@
+PID disponibili:
+
+- PID_COOLANT_TEMP "0105"
+- PID_AIR_INTAKE_TEMP "010F"
+- PID_RPM "010C"
+- PID_ENGINE_LOAD "0104"
+- PID_MAF "0110"
+- PID_FUEL_SYSTEM_STATUS "0103"
+- PID_BAROMETRIC_PRESSURE "0133"
+- PID_BATTERY_VOLTAGE "0142"
+- PID_DTC_STATUS "0101"
+- PID_VEHICLE_SPEED "010D"
+
+Modificare la libreria M5Stack.cpp per utilizzare intrrupt sui tasti "B" e "C"
+Sul tasto "A" non è possibile utlizzare interrupt se si abilita il bluetooth
