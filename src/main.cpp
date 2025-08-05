@@ -1,12 +1,24 @@
-#include <M5Stack.h>
+#include <M5Unified.h>
 #include <BluetoothSerial.h>
-//#include <Free_Fonts.h>
+
+// Definisci il tipo di M5Stack
+#define M5STACK_CORE2  // Commenta questa riga per M5Stack Core classico
 
 #define DEBUG
-#define ButtonC GPIO_NUM_37
-#define ButtonB GPIO_NUM_38
-#define ButtonA GPIO_NUM_39
-//define PID
+
+// Definizioni GPIO per i diversi modelli
+#ifdef M5STACK_CORE2
+  // M5Stack Core2 - pulsanti touch/virtuali
+  // I pulsanti fisici non esistono, useremo touch o pulsanti virtuali
+  #define USE_TOUCH_BUTTONS
+#else
+  // M5Stack Core classico
+  #define ButtonC GPIO_NUM_37
+  #define ButtonB GPIO_NUM_38
+  #define ButtonA GPIO_NUM_39
+#endif
+
+// Define PID
 #define PID_COOLANT_TEMP "0105"
 #define PID_AIR_INTAKE_TEMP "010F"
 #define PID_RPM "010C"
@@ -21,10 +33,16 @@
 #define m5Name "M5Stack_OBD"
 
 BluetoothSerial ELM_PORT;
-bool counter = false ;
+bool counter = false;
 volatile bool buttonPressed = false;
 unsigned long lastDebounceTime = 0;
 unsigned long debounceDelay = 50;
+
+// Variabili per touch (Core2)
+#ifdef USE_TOUCH_BUTTONS
+  bool lastTouchState = false;
+  int lastTouchX = 0, lastTouchY = 0;
+#endif
 
 // Dichiarazione funzioni
 bool ELMinit();
@@ -32,10 +50,12 @@ bool BTconnect();
 bool sendAndReadCommand(const char* cmd, String& response, int delayTime);
 void updateDisplay();
 void dataRequestOBD();
-void displayDebugMessage(const char* message, int x , int y, uint16_t textColour);
+void displayDebugMessage(const char* message, int x, int y, uint16_t textColour);
 void sendOBDCommand(const char* cmd);
 void writeToCircularBuffer(char c);
 void handleOBDResponse();
+void handleInput(); // Nuova funzione per gestire input universale
+void drawTouchButtons(); // Per Core2
 // funzioni lcd
 void mainScreen();
 void coolantScreen();
@@ -68,8 +88,8 @@ float rpm = 0.0;
 float obdVoltage = 0.0;
 float engineLoad = 0.0;
 float MAF = 0.0;
-float lastCoolantTemp = -999.0; 
-float lastIntakeTemp = -999.0; 
+float lastCoolantTemp = -999.0;
+float lastIntakeTemp = -999.0;
 float lastOilTemp = -999.0;
 float lastEngineLoad = -999.0;
 float lastMAFvalue = -999.0;
@@ -92,52 +112,101 @@ const int BUFFER_SIZE = 256;
 char circularBuffer[BUFFER_SIZE];
 int writeIndex = 0;
 int readIndex = 0;
-int screenIndex[5] = { 0, 1, 2, 3, 4 };
+int screenIndex[5] = {0, 1, 2, 3, 4};
 int z = 1;
 int zLast = -1;
 
 void setup() {
-  M5.begin();
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setRotation(1);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.fillScreen(BLACK);
+  // Inizializzazione M5Unified (compatibile con tutti i modelli)
+  auto cfg = M5.config();
+  M5.begin(cfg);
+  
+  M5.Display.setTextSize(2);
+  M5.Display.setRotation(1);
+  M5.Display.setTextColor(WHITE);
+  M5.Display.fillScreen(BLACK);
+  
   Serial.begin(115200);
   Serial.println("Setup in corso...");
+
+#ifdef M5STACK_CORE2
+  Serial.println("M5Stack Core2 detected - Using touch interface");
+  drawTouchButtons();
+#else
+  Serial.println("M5Stack Core detected - Using physical buttons");
   //pinMode(ButtonA, INPUT);
   pinMode(ButtonB, INPUT);
   pinMode(ButtonC, INPUT);
+  
+  //attachInterrupt(digitalPinToInterrupt(ButtonA), indexUp, RISING);
+  attachInterrupt(digitalPinToInterrupt(ButtonB), indexUp, RISING);
+  attachInterrupt(digitalPinToInterrupt(ButtonC), indexDown, RISING);
+#endif
+
   BTconnect();
   delay(1000);
   ELMinit();
   delay(500);
- 
-  //attachInterrupt(digitalPinToInterrupt(ButtonA), indexUp, RISING); // Se il bluetooth è abilitato non è possibile utilizzare interrupt su GPIO39
-  attachInterrupt(digitalPinToInterrupt(ButtonB), indexUp, RISING);
-  attachInterrupt(digitalPinToInterrupt(ButtonC), indexDown, RISING);
 }
 
 void loop() {
- 
-  if(z>4) z=0;
-  if(z<0) z=4;
-
-  if (z != zLast){
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.clearDisplay();
-  }
+  M5.update(); // Importante per M5Unified
   
-  switch (screenIndex[z]){
+  if(z > 4) z = 0;
+  if(z < 0) z = 4;
+
+  // Gestione input universale
+  handleInput();
+
+  if (z != zLast) {
+    M5.Display.setTextSize(2);
+    M5.Display.fillScreen(BLACK);
+#ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+#endif
+  }
+
+  switch (screenIndex[z]) {
     case 0: mainScreen(); break;
     case 1: coolantScreen(); break;
     case 2: engineLoadScreen(); break;
     case 3: barometricScreen(); break;
     case 4: mafScreen(); break;
   }
- zLast = z;
+  zLast = z;
 }
 
-void mainScreen(){
+void handleInput() {
+#ifdef USE_TOUCH_BUTTONS
+  // Gestione touch per Core2
+  auto t = M5.Touch.getDetail();
+  if (t.wasPressed()) {
+    if (t.x < 160 && t.y > 200) { // Pulsante sinistro
+      indexDown();
+    } else if (t.x >= 160 && t.y > 200) { // Pulsante destro
+      indexUp();
+    }
+  }
+#else
+  // Per Core classico, gli interrupt gestiranno i pulsanti
+  // Nessuna azione aggiuntiva necessaria qui
+#endif
+}
+
+#ifdef USE_TOUCH_BUTTONS
+void drawTouchButtons() {
+  // Disegna pulsanti virtuali per Core2
+  M5.Display.fillRect(10, 210, 140, 25, DARKGREY);
+  M5.Display.fillRect(170, 210, 140, 25, DARKGREY);
+  M5.Display.setTextColor(WHITE);
+  M5.Display.setTextSize(1);
+  M5.Display.drawString("< PREV", 60, 220);
+  M5.Display.drawString("NEXT >", 220, 220);
+  M5.Display.setTextSize(2);
+}
+#endif
+
+void mainScreen() {
   unsigned long currentMillis = millis();
   if (currentMillis - lastOBDQueryTime >= OBDQueryInterval) {
     lastOBDQueryTime = currentMillis;
@@ -150,33 +219,30 @@ void mainScreen(){
 void coolantScreen() {
   int fontLCD = 3;
   static float lastCoolantTempMenu = -999.0;
-//  static float lastBarometricPressure = -999.0;
-//  static float lastIntakeTemp = -999.0;
-//  static float lastMAF = -999.0;
-  
-  if(firstCoolantScreen){
-    M5.Lcd.fillScreen(BLACK);
-    /*
-    M5.Lcd.drawFastHLine(0, 120, 320 , YELLOW);
-    M5.Lcd.drawFastVLine(150, 0, 120, GREEN);
-    */
-    M5.Lcd.fillRect(0, 120, 320 ,5, OLIVE);
-    M5.Lcd.fillRect(150, 0, 5, 290, OLIVE);
-    M5.Lcd.setCursor(0, 0);
-    //M5.Lcd.setFreeFont(FF1);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.setTextColor(LIGHTGREY);
-    M5.Lcd.drawString("Temp.Acqua",5, 130, 2);
-    M5.Lcd.drawString("Pot.Mot %", 10 , 0, 2);
-    M5.Lcd.drawString("Temp.Aria C°", 180 , 0, 2);
-    M5.Lcd.drawString("In.Aria %" , 180, 130 , 2 );
+
+  if(firstCoolantScreen) {
+    M5.Display.fillScreen(BLACK);
+    M5.Display.fillRect(0, 120, 320, 5, OLIVE);
+    M5.Display.fillRect(150, 0, 5, 290, OLIVE);
+    M5.Display.setCursor(0, 0);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(LIGHTGREY);
+    M5.Display.drawString("Temp.Acqua", 5, 130);
+    M5.Display.drawString("Pot.Mot %", 10, 0);
+    M5.Display.drawString("Temp.Aria C°", 180, 0);
+    M5.Display.drawString("In.Aria %", 180, 130);
+    
+#ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+#endif
+    
     firstMainScreen = true;
     firstCoolantScreen = false;
     firstEngineScreen = true;
     firstBarScreen = true;
     firstMafScreen = true;
- }
-  
+  }
+
   sendOBDCommand(PID_COOLANT_TEMP);
   handleOBDResponse();
   sendOBDCommand(PID_ENGINE_LOAD);
@@ -186,112 +252,93 @@ void coolantScreen() {
   sendOBDCommand(PID_MAF);
   handleOBDResponse();
 
-  /*
-  if (coolantTemp >120){
-    counter = true;
-  }
-  if (counter == false){
-    coolantTemp++;
-    MAF++;
-    engineLoad++;
-    intakeTemp++;
-  }
-  else if (counter == true){
-    coolantTemp--;
-    MAF--;
-    engineLoad--;
-    intakeTemp--;
-  }
-  */
-
- // Aggiorna solo se i valori sono cambiati
+  // Aggiorna solo se i valori sono cambiati
   if (coolantTemp != lastCoolantTempMenu) {
-    M5.Lcd.fillRect(5, 175, 140, 62, BLACK); // Cancella la vecchia area
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.setTextColor((coolantTemp <= 65) ? BLUE : (coolantTemp > 65 && coolantTemp <= 80) ? GREENYELLOW : (coolantTemp >= 81 && coolantTemp <= 100) ? GREEN : (coolantTemp <= 102) ? ORANGE : RED);
-    M5.Lcd.drawNumber(coolantTemp, 58, 195);
-    
-    if (coolantTemp <100){
-         M5.Lcd.fillCircle(35, 190, 10, BLACK);
-      }
-    else if (coolantTemp >=110){
-         M5.Lcd.fillCircle(35, 190, 10, RED);
-    }
-    else if(coolantTemp >= 101 ){
-      M5.Lcd.fillCircle(35, 190, 10, YELLOW);
-    } 
+    M5.Display.fillRect(5, 175, 140, 62, BLACK); // Cancella la vecchia area
+    M5.Display.setTextSize(3);
+    M5.Display.setTextColor((coolantTemp <= 65) ? BLUE : (coolantTemp > 65 && coolantTemp <= 80) ? GREENYELLOW : (coolantTemp >= 81 && coolantTemp <= 100) ? GREEN : (coolantTemp <= 102) ? ORANGE : RED);
+    M5.Display.drawNumber(coolantTemp, 58, 195);
 
-    lastCoolantTemp = coolantTemp; // Aggiorna lastCoolantTemp solo quando il valore cambia
+    if (coolantTemp < 100) {
+      M5.Display.fillCircle(35, 190, 10, BLACK);
+    }
+    else if (coolantTemp >= 110) {
+      M5.Display.fillCircle(35, 190, 10, RED);
+    }
+    else if(coolantTemp >= 101) {
+      M5.Display.fillCircle(35, 190, 10, YELLOW);
+    }
+
+    lastCoolantTemp = coolantTemp;
   }
 
   if (MAF != lastMAFvalue) {
-    M5.Lcd.fillRect(165, 175, 170, 62, BLACK); // Cancella la vecchia area
-    M5.Lcd.setTextColor(LIGHTGREY);
-    M5.Lcd.drawNumber(MAF, 235, 195);
+    M5.Display.fillRect(165, 175, 170, 62, BLACK);
+    M5.Display.setTextColor(LIGHTGREY);
+    M5.Display.drawNumber(MAF, 235, 195);
     lastMAFvalue = MAF;
   }
 
   if (engineLoad != lastEngineLoad) {
-    M5.Lcd.fillRect(5, 55, 140, 62, BLACK); // Cancella la vecchia area
-    M5.Lcd.setTextSize(3);
-    //M5.Lcd.setTextColor(LIGHTGREY);
-    M5.Lcd.setTextColor((engineLoad <= 65) ? DARKGREEN : (engineLoad >65 && engineLoad <= 78) ? GREENYELLOW : (engineLoad > 78 && engineLoad <= 88) ? ORANGE : (engineLoad > 88) ? RED : RED);
-    M5.Lcd.drawNumber(engineLoad, 58 , 70);
+    M5.Display.fillRect(5, 55, 140, 62, BLACK);
+    M5.Display.setTextSize(3);
+    M5.Display.setTextColor((engineLoad <= 65) ? DARKGREEN : (engineLoad > 65 && engineLoad <= 78) ? GREENYELLOW : (engineLoad > 78 && engineLoad <= 88) ? ORANGE : (engineLoad > 88) ? RED : RED);
+    M5.Display.drawNumber(engineLoad, 58, 70);
 
-    if (engineLoad <=55){
-      M5.Lcd.fillCircle(35, 65, 10, BLACK);
+    if (engineLoad <= 55) {
+      M5.Display.fillCircle(35, 65, 10, BLACK);
     }
-    else if (engineLoad > 88){
-      M5.Lcd.fillCircle(35, 65, 10, RED);
+    else if (engineLoad > 88) {
+      M5.Display.fillCircle(35, 65, 10, RED);
     }
-    else if (engineLoad > 78 && engineLoad <= 88){
-      M5.Lcd.fillCircle(35, 65, 10, ORANGE);
+    else if (engineLoad > 78 && engineLoad <= 88) {
+      M5.Display.fillCircle(35, 65, 10, ORANGE);
     }
-    else if (engineLoad >65 && engineLoad <= 78){
-         M5.Lcd.fillCircle(35, 65, 10, GREENYELLOW);
+    else if (engineLoad > 65 && engineLoad <= 78) {
+      M5.Display.fillCircle(35, 65, 10, GREENYELLOW);
     }
-    else if(engineLoad >= 101 ){
-      M5.Lcd.fillCircle(35, 65, 10, YELLOW);
-   }
+    else if(engineLoad >= 101) {
+      M5.Display.fillCircle(35, 65, 10, YELLOW);
+    }
 
-   lastEngineLoad = engineLoad; // Aggiorna lastBarometricPressure solo quando il valore cambia
+    lastEngineLoad = engineLoad;
   }
 
   if (intakeTemp != lastIntakeTemp) {
-    M5.Lcd.fillRect(165, 55, 170, 62, BLACK); // Cancella la vecchia area
-    M5.Lcd.setTextColor(LIGHTGREY);
-    M5.Lcd.drawNumber(intakeTemp, 235 , 62);
+    M5.Display.fillRect(165, 55, 170, 62, BLACK);
+    M5.Display.setTextColor(LIGHTGREY);
+    M5.Display.drawNumber(intakeTemp, 235, 62);
     lastIntakeTemp = intakeTemp;
   }
 }
 
 bool BTconnect() {
   ELM_PORT.begin(m5Name, true);  // Avvia la connessione Bluetooth
-  #ifdef DEBUG
-    displayDebugMessage("Connessione BT...", 0, 200, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage("Connessione BT...", 0, 200, WHITE);
+#endif
   int retries = 0;  // Tentativo connessione bluetooth ELM327 (5 try)
   bool connected = false;
   while (retries < 2 && !connected) {
     connected = ELM_PORT.connect(BLEAddress);
     if (!connected) {
-      #ifdef DEBUG
-        displayDebugMessage("BT Conn FAIL", 0, 200, WHITE);
-      #endif
+#ifdef DEBUG
+      displayDebugMessage("BT Conn FAIL", 0, 200, WHITE);
+#endif
       retries++;
       delay(500);
     }
   }
 
   if (!connected) {
-    #ifdef DEBUG
-      displayDebugMessage("ELM BT NOT FOUND", 0, 200, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("ELM BT NOT FOUND", 0, 200, WHITE);
+#endif
     return false;  // Loop infinito se non riesce a connettersi
   } else {
-    #ifdef DEBUG
-      displayDebugMessage("Connessione BT OK!", 0, 200, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Connessione BT OK!", 0, 200, WHITE);
+#endif
     return true;
   }
 }
@@ -312,15 +359,15 @@ bool sendAndReadCommand(const char* cmd, String& response, int delayTime) {
   response.trim(); // Rimuove spazi bianchi
 
   if (response.length() > 0) {
-    #ifdef DEBUG
-        displayDebugMessage(response.c_str(), 0 , 200, GREEN);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage(response.c_str(), 0, 200, GREEN);
+#endif
   }
 
   if (response.length() == 0) {
-    #ifdef DEBUG
-      Serial.println("No RCV");
-    #endif
+#ifdef DEBUG
+    Serial.println("No RCV");
+#endif
     return false;
   }
 
@@ -338,15 +385,15 @@ void sendOBDCommand(const char* cmd) {
 }
 
 String bufferSerialData(int timeout, int numChars) {
-    unsigned long startTime = millis();
-    while (millis() - startTime < timeout) {
-        while (ELM_PORT.available()) {
-            char c = ELM_PORT.read();
-            writeToCircularBuffer(c);
-        }
-        delay(30); // Breve delay per non sovraccaricare la CPU
+  unsigned long startTime = millis();
+  while (millis() - startTime < timeout) {
+    while (ELM_PORT.available()) {
+      char c = ELM_PORT.read();
+      writeToCircularBuffer(c);
     }
-    return readFromCircularBuffer(numChars);
+    delay(30); // Breve delay per non sovraccaricare la CPU
+  }
+  return readFromCircularBuffer(numChars);
 }
 
 void dataRequestOBD() {
@@ -382,19 +429,19 @@ void parseOBDData(const String& response) {
   if (response.indexOf("4105") >= 0) {
     coolantTemp = parseCoolantTemp(response);
   }
-   else if (response.indexOf("410C") >= 0) {
+  else if (response.indexOf("410C") >= 0) {
     rpm = parseRPM(response);
   }
-   else if (response.indexOf("410F") >= 0) {
+  else if (response.indexOf("410F") >= 0) {
     intakeTemp = parseIntakeTemp(response);
   }
-   else if (response.indexOf("V") >= 0) {
+  else if (response.indexOf("V") >= 0) {
     obdVoltage = parseOBDVoltage(response);
-  } 
+  }
   else if (response.indexOf("4104") >= 0) {
     engineLoad = parseEngineLoad(response);
   }
-   else if (response.indexOf("4110") >= 0) {
+  else if (response.indexOf("4110") >= 0) {
     MAF = parseMAF(response);
   }
 }
@@ -480,199 +527,211 @@ void updateDisplay() {
   static float lastIntakeTemp = -999.0;
   static float lastEngineLoad = -999.0;
   static float lastMAF = -999.0;
-  
-  if (firstMainScreen){
-     M5.Lcd.fillScreen(BLACK);
-    for(int i=15; i<160; i+=20){ M5.Lcd.drawFastHLine(0, i, 320 , OLIVE); }
-     M5.Lcd.drawFastVLine(240, 0, 155, OLIVE);
-     M5.Lcd.setCursor(0, 0);
-     M5.Lcd.setTextSize(2);
+
+  if (firstMainScreen) {
+    M5.Display.fillScreen(BLACK);
+    for(int i = 15; i < 160; i += 20) { 
+      M5.Display.drawFastHLine(0, i, 320, OLIVE); 
+    }
+    M5.Display.drawFastVLine(240, 0, 155, OLIVE);
+    M5.Display.setCursor(0, 0);
+    M5.Display.setTextSize(2);
+    
+#ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+#endif
+    
     firstMainScreen = false;
     firstCoolantScreen = true;
     firstEngineScreen = true;
     firstBarScreen = true;
     firstMafScreen = true;
   }
-  
- 
- if (coolantTemp != lastCoolantTemp) {
-    M5.Lcd.fillRect(0, 0, 320, 20, BLACK);  // Aggiorna solo la parte della temperatura del liquido refrigerante
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.setTextColor((coolantTemp < 50) ? LIGHTGREY : (coolantTemp >= 40 && coolantTemp <= 65) ? BLUE : (coolantTemp > 65 && coolantTemp <= 80) ? GREENYELLOW : (coolantTemp >= 81 && coolantTemp <= 100) ? GREEN : (coolantTemp <= 102) ? ORANGE : RED);
-    M5.Lcd.printf("Coolant Temp: %.1f C\n", coolantTemp);
+
+  if (coolantTemp != lastCoolantTemp) {
+    M5.Display.fillRect(0, 0, 320, 20, BLACK);  // Aggiorna solo la parte della temperatura del liquido refrigerante
+    M5.Display.setCursor(0, 0);
+    M5.Display.setTextColor((coolantTemp < 50) ? LIGHTGREY : (coolantTemp >= 40 && coolantTemp <= 65) ? BLUE : (coolantTemp > 65 && coolantTemp <= 80) ? GREENYELLOW : (coolantTemp >= 81 && coolantTemp <= 100) ? GREEN : (coolantTemp <= 102) ? ORANGE : RED);
+    M5.Display.printf("Coolant Temp: %.1f C\n", coolantTemp);
     lastCoolantTemp = coolantTemp;
   }
 
   if (obdVoltage != lastObdVoltage) {
-    M5.Lcd.fillRect(0, 20, 320, 20, BLACK);  // Aggiorna solo la parte della tensione OBD
-    M5.Lcd.setCursor(0, 20);
-    M5.Lcd.setTextColor((obdVoltage < 11.8) ? RED : (obdVoltage > 11.8 && obdVoltage <= 12.1) ? YELLOW : (obdVoltage > 12.1 && obdVoltage <= 13.8) ? GREEN : (obdVoltage > 13.8 && obdVoltage <= 14.5) ? GREENYELLOW : ORANGE);
-    M5.Lcd.printf("OBD Voltage: %.2f V\n", obdVoltage);
+    M5.Display.fillRect(0, 20, 320, 20, BLACK);  // Aggiorna solo la parte della tensione OBD
+    M5.Display.setCursor(0, 20);
+    M5.Display.setTextColor((obdVoltage < 11.8) ? RED : (obdVoltage > 11.8 && obdVoltage <= 12.1) ? YELLOW : (obdVoltage > 12.1 && obdVoltage <= 13.8) ? GREEN : (obdVoltage > 13.8 && obdVoltage <= 14.5) ? GREENYELLOW : ORANGE);
+    M5.Display.printf("OBD Voltage: %.2f V\n", obdVoltage);
     lastObdVoltage = obdVoltage;
   }
 
   if (rpm != lastRpm) {
-    M5.Lcd.fillRect(0, 40, 320, 20, BLACK);  // Aggiorna solo la parte del RPM
-    M5.Lcd.setCursor(0, 40);
-    M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.printf("RPM: %.0f\n", rpm);
+    M5.Display.fillRect(0, 40, 320, 20, BLACK);  // Aggiorna solo la parte del RPM
+    M5.Display.setCursor(0, 40);
+    M5.Display.setTextColor(WHITE);
+    M5.Display.printf("RPM: %.0f\n", rpm);
     lastRpm = rpm;
   }
 
   if (intakeTemp != lastIntakeTemp) {
-    M5.Lcd.fillRect(0, 60, 320, 20, BLACK);  // Aggiorna solo la parte della temperatura di aspirazione
-    M5.Lcd.setCursor(0, 60);
-    M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.printf("Intake Temp: %.1f C\n", intakeTemp);
+    M5.Display.fillRect(0, 60, 320, 20, BLACK);  // Aggiorna solo la parte della temperatura di aspirazione
+    M5.Display.setCursor(0, 60);
+    M5.Display.setTextColor(WHITE);
+    M5.Display.printf("Intake Temp: %.1f C\n", intakeTemp);
     lastIntakeTemp = intakeTemp;
   }
 
   if (engineLoad != lastEngineLoad) {
-    M5.Lcd.fillRect(0, 80, 320, 20, BLACK);  // Aggiorna solo la parte del carico del motore
-    M5.Lcd.setCursor(0, 80);
-    M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.printf("Engine Load: %.1f%%\n", engineLoad);
+    M5.Display.fillRect(0, 80, 320, 20, BLACK);  // Aggiorna solo la parte del carico del motore
+    M5.Display.setCursor(0, 80);
+    M5.Display.setTextColor(WHITE);
+    M5.Display.printf("Engine Load: %.1f%%\n", engineLoad);
     lastEngineLoad = engineLoad;
   }
 
   if (MAF != lastMAF) {
-    M5.Lcd.fillRect(0, 100, 320, 20, BLACK);  // Aggiorna solo la parte del MAF
-    M5.Lcd.setCursor(0, 100);
-    M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.printf("MAF: %.1f%%\n", MAF);
+    M5.Display.fillRect(0, 100, 320, 20, BLACK);  // Aggiorna solo la parte del MAF
+    M5.Display.setCursor(0, 100);
+    M5.Display.setTextColor(WHITE);
+    M5.Display.printf("MAF: %.1f%%\n", MAF);
     lastMAF = MAF;
   }
 }
 
-void displayDebugMessage(const char* message, int x , int y, uint16_t textColour) {
-  M5.Lcd.setTextColor(textColour);
-  M5.Lcd.fillRect(x, y, 320, 40, BLACK);  // Pulisce la parte bassa del display
-  M5.Lcd.setCursor(x, y);
-  M5.Lcd.print(message);
+void displayDebugMessage(const char* message, int x, int y, uint16_t textColour) {
+  M5.Display.setTextColor(textColour);
+  M5.Display.fillRect(x, y, 320, 40, BLACK);  // Pulisce la parte bassa del display
+  M5.Display.setCursor(x, y);
+  M5.Display.print(message);
   Serial.println(message);  // Mostra anche nel monitor seriale
 }
 
 bool ELMinit() {
   String response;
 
-  #ifdef DEBUG
-    displayDebugMessage("ELM init...", 0 ,200, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage("ELM init...", 0, 200, WHITE);
+#endif
 
   if (!sendAndReadCommand("ATZ", response, 1500)) {
-    #ifdef DEBUG
-      displayDebugMessage("Err ATZ", 0 , 20, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Err ATZ", 0, 20, WHITE);
+#endif
     return false;
   }
-  #ifdef DEBUG
-    displayDebugMessage(response.c_str(), 0 , 20, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage(response.c_str(), 0, 20, WHITE);
+#endif
 
   if (!sendAndReadCommand("ATE0", response, 1500)) {
-    #ifdef DEBUG
-      displayDebugMessage("Err ATE0", 0 , 40, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Err ATE0", 0, 40, WHITE);
+#endif
     return false;
   }
-  #ifdef DEBUG
-    displayDebugMessage(response.c_str(), 0 , 40, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage(response.c_str(), 0, 40, WHITE);
+#endif
 
   if (!sendAndReadCommand("ATL0", response, 1500)) {
-    #ifdef DEBUG
-      displayDebugMessage("Err ATL0", 0 , 60, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Err ATL0", 0, 60, WHITE);
+#endif
     return false;
   }
-  #ifdef DEBUG
-    displayDebugMessage(response.c_str(), 0 , 60, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage(response.c_str(), 0, 60, WHITE);
+#endif
 
   if (!sendAndReadCommand("ATS0", response, 1500)) {
-    #ifdef DEBUG
-      displayDebugMessage("Err ATS0", 0 , 80, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Err ATS0", 0, 80, WHITE);
+#endif
     return false;
   }
-  #ifdef DEBUG
-    displayDebugMessage(response.c_str(), 0 , 80, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage(response.c_str(), 0, 80, WHITE);
+#endif
 
   if (!sendAndReadCommand("ATST0A", response, 1500)) {
-    #ifdef DEBUG
-      displayDebugMessage("Err ATST0A", 0 , 100, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Err ATST0A", 0, 100, WHITE);
+#endif
     return false;
   }
-  #ifdef DEBUG
-    displayDebugMessage(response.c_str(), 0 , 100, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage(response.c_str(), 0, 100, WHITE);
+#endif
 
   if (!sendAndReadCommand("ATSP0", response, 15000)) {  // Imposta protocollo automatico SP 0 e gestire la risposta "SEARCHING..."
-    #ifdef DEBUG
-      displayDebugMessage("Err ATSP0", 0 , 120, WHITE);
-    #endif
+#ifdef DEBUG
+    displayDebugMessage("Err ATSP0", 0, 120, WHITE);
+#endif
     return false;
   }
-  #ifdef DEBUG
-    displayDebugMessage(response.c_str(), 0 , 120, WHITE);
-  #endif
+#ifdef DEBUG
+  displayDebugMessage(response.c_str(), 0, 120, WHITE);
+#endif
 
   return true;
 }
 
 void writeToCircularBuffer(char c) {
-    circularBuffer[writeIndex] = c;
-    writeIndex = (writeIndex + 1) % BUFFER_SIZE;
-    if (writeIndex == readIndex) {
-        readIndex = (readIndex + 1) % BUFFER_SIZE; // Sovrascrivi i dati più vecchi
-    }
+  circularBuffer[writeIndex] = c;
+  writeIndex = (writeIndex + 1) % BUFFER_SIZE;
+  if (writeIndex == readIndex) {
+    readIndex = (readIndex + 1) % BUFFER_SIZE; // Sovrascrivi i dati più vecchi
+  }
 }
 
 String readFromCircularBuffer(int numChars) {
-    String result = "";
-    int charsRead = 0;
-    
-    // Leggi dal buffer finché ci sono caratteri da leggere
-    // e non si è raggiunto il numero massimo di caratteri richiesti
-    while (readIndex != writeIndex && charsRead < numChars) {
-        result += circularBuffer[readIndex];
-        readIndex = (readIndex + 1) % BUFFER_SIZE;
-        charsRead++;
-    }
+  String result = "";
+  int charsRead = 0;
 
-    result.trim();  // Rimuove gli spazi bianchi extra all'inizio e alla fine
-    return result;
+  // Leggi dal buffer finché ci sono caratteri da leggere
+  // e non si è raggiunto il numero massimo di caratteri richiesti
+  while (readIndex != writeIndex && charsRead < numChars) {
+    result += circularBuffer[readIndex];
+    readIndex = (readIndex + 1) % BUFFER_SIZE;
+    charsRead++;
+  }
+
+  result.trim();  // Rimuove gli spazi bianchi extra all'inizio e alla fine
+  return result;
 }
 
 void rpmScreen() {
   sendOBDCommand(PID_RPM);
   delay(20);
   handleOBDResponse();
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("RPM: %.0f", rpm);
+  M5.Display.fillScreen(BLACK);
+  M5.Display.setTextSize(3);
+  M5.Display.setTextColor(WHITE);
+  M5.Display.setCursor(10, 10);
+  M5.Display.printf("RPM: %.0f", rpm);
+#ifdef USE_TOUCH_BUTTONS
+  drawTouchButtons();
+#endif
 }
 
 void engineLoadScreen() {
   sendOBDCommand(PID_ENGINE_LOAD);
   delay(20);
   handleOBDResponse();
-  if(firstEngineScreen){
-    M5.Lcd.fillScreen(BLACK);
+  if(firstEngineScreen) {
+    M5.Display.fillScreen(BLACK);
+#ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+#endif
     firstMainScreen = true;
     firstCoolantScreen = true;
     firstEngineScreen = false;
     firstBarScreen = true;
     firstMafScreen = true;
   }
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("Engine Load: %.1f%%", engineLoad);
+  M5.Display.setTextSize(3);
+  M5.Display.setTextColor(WHITE);
+  M5.Display.setCursor(10, 10);
+  M5.Display.printf("Engine Load: %.1f%%", engineLoad);
 }
 
 void mafScreen() {
