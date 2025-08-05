@@ -1,15 +1,14 @@
 #include <M5Unified.h>
 #include <BluetoothSerial.h>
 
-// Definisci il tipo di M5Stack
+// tipo di M5Stack
 #define M5STACK_CORE2  // Commenta questa riga per M5Stack Core classico
 
 #define DEBUG
 
 // Definizioni GPIO per i diversi modelli
 #ifdef M5STACK_CORE2
-  // M5Stack Core2 - pulsanti touch/virtuali
-  // I pulsanti fisici non esistono, useremo touch o pulsanti virtuali
+   
   #define USE_TOUCH_BUTTONS
 #else
   // M5Stack Core classico
@@ -50,6 +49,7 @@ bool BTconnect();
 bool sendAndReadCommand(const char* cmd, String& response, int delayTime);
 void updateDisplay();
 void dataRequestOBD();
+
 void displayDebugMessage(const char* message, int x, int y, uint16_t textColour);
 void sendOBDCommand(const char* cmd);
 void writeToCircularBuffer(char c);
@@ -80,7 +80,7 @@ float parseBarometricPressure(const String& response);
 String parseDTCStatus(const String& response);
 
 uint8_t BLEAddress[6] = {0x00, 0x10, 0xCC, 0x4F, 0x36, 0x03};  // Indirizzo Bluetooth del modulo ELM327
-
+//uint8_t BLEAddress[6] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xBA};  // Indirizzo Bluetooth del modulo ELM327
 float coolantTemp = 0.0;
 float oilTemp = 0.0;
 float intakeTemp = 0.0;
