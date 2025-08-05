@@ -2,11 +2,11 @@
 #include <BluetoothSerial.h>
 
 // tipo di M5Stack
-#define M5STACK_CORE2  // Commenta questa riga per M5Stack Core classico
+#define M5STACK_CORE2
 
 #define DEBUG
 
-// Definizioni GPIO per i diversi modelli
+// Def GPIO
 #ifdef M5STACK_CORE2
    
   #define USE_TOUCH_BUTTONS
@@ -17,7 +17,7 @@
   #define ButtonA GPIO_NUM_39
 #endif
 
-// Define PID
+// Def PID
 #define PID_COOLANT_TEMP "0105"
 #define PID_AIR_INTAKE_TEMP "010F"
 #define PID_RPM "010C"
@@ -49,13 +49,13 @@ bool BTconnect();
 bool sendAndReadCommand(const char* cmd, String& response, int delayTime);
 void updateDisplay();
 void dataRequestOBD();
-
 void displayDebugMessage(const char* message, int x, int y, uint16_t textColour);
 void sendOBDCommand(const char* cmd);
 void writeToCircularBuffer(char c);
 void handleOBDResponse();
 void handleInput(); // Nuova funzione per gestire input universale
 void drawTouchButtons(); // Per Core2
+
 // funzioni lcd
 void mainScreen();
 void coolantScreen();
@@ -102,11 +102,11 @@ bool firstEngineScreen = true;
 bool firstBarScreen = true;
 bool firstMafScreen = true;
 
-const unsigned long voltageQueryInterval = 1000; // Intervallo di 4 secondi
+const unsigned long voltageQueryInterval = 1000; // Intervallo di X secondi
 
 unsigned long lastVoltageQueryTime = 0;
 unsigned long lastOBDQueryTime = 0;
-unsigned long OBDQueryInterval = 150; // Intervallo di query OBD in millisecondi
+unsigned long OBDQueryInterval = 200; // Intervallo query OBD in millisecondi
 
 const int BUFFER_SIZE = 256;
 char circularBuffer[BUFFER_SIZE];
@@ -117,7 +117,7 @@ int z = 1;
 int zLast = -1;
 
 void setup() {
-  // Inizializzazione M5Unified (compatibile con tutti i modelli)
+  // Init M5Unified
   auto cfg = M5.config();
   M5.begin(cfg);
   
@@ -150,8 +150,7 @@ void setup() {
 }
 
 void loop() {
-  M5.update(); // Importante per M5Unified
-  
+  M5.update();  
   if(z > 4) z = 0;
   if(z < 0) z = 4;
 
@@ -189,7 +188,6 @@ void handleInput() {
   }
 #else
   // Per Core classico, gli interrupt gestiranno i pulsanti
-  // Nessuna azione aggiuntiva necessaria qui
 #endif
 }
 
@@ -446,7 +444,6 @@ void parseOBDData(const String& response) {
   }
 }
 
-// Funzione per analizzare la temperatura del liquido di raffreddamento
 float parseCoolantTemp(const String& response) {
   if (response.indexOf("4105") == 0) {
     byte tempByte = strtoul(response.substring(4, 6).c_str(), NULL, 16);
@@ -455,7 +452,6 @@ float parseCoolantTemp(const String& response) {
   return lastCoolantTemp;
 }
 
-// Funzione per analizzare la temperatura dell'aria di aspirazione
 float parseIntakeTemp(const String& response) {
   if (response.indexOf("410F") == 0) {
     byte tempByte = strtoul(response.substring(4, 6).c_str(), NULL, 16);
@@ -464,7 +460,6 @@ float parseIntakeTemp(const String& response) {
   return lastIntakeTemp;
 }
 
-// Funzione per analizzare i giri del motore (RPM)
 float parseRPM(const String& response) {
   if (response.indexOf("410C") == 0) {
     byte highByte = strtoul(response.substring(4, 6).c_str(), NULL, 16);
@@ -474,7 +469,6 @@ float parseRPM(const String& response) {
   return 0.0;
 }
 
-// Funzione per analizzare il carico del motore
 float parseEngineLoad(const String& response) {
   if (response.indexOf("4104") == 0) {
     byte loadByte = strtoul(response.substring(4, 6).c_str(), NULL, 16);
@@ -483,7 +477,6 @@ float parseEngineLoad(const String& response) {
   return lastEngineLoad;
 }
 
-// Funzione per analizzare il flusso di massa d'aria (MAF)
 float parseMAF(const String& response) {
   if (response.indexOf("4110") == 0) {
     int A = strtoul(response.substring(4, 6).c_str(), NULL, 16);
@@ -493,7 +486,6 @@ float parseMAF(const String& response) {
   return lastMAFvalue;
 }
 
-// Funzione per analizzare la pressione barometrica
 float parseBarometricPressure(const String& response) {
   if (response.indexOf("4133") == 0) {
     byte pressureByte = strtoul(response.substring(4, 6).c_str(), NULL, 16);
@@ -502,7 +494,6 @@ float parseBarometricPressure(const String& response) {
   return 0.0;
 }
 
-// Funzione per analizzare la tensione OBD
 float parseOBDVoltage(const String& response) {
   int indexV = response.indexOf('V');
   if (indexV >= 0) {
@@ -512,7 +503,6 @@ float parseOBDVoltage(const String& response) {
   return 0.0;
 }
 
-// Funzione per analizzare lo stato dei DTC
 String parseDTCStatus(const String& response) {
   if (response.indexOf("4101") == 0) {
     return response.substring(4);  // Estrae il messaggio DTC completo
@@ -602,7 +592,7 @@ void displayDebugMessage(const char* message, int x, int y, uint16_t textColour)
   M5.Display.fillRect(x, y, 320, 40, BLACK);  // Pulisce la parte bassa del display
   M5.Display.setCursor(x, y);
   M5.Display.print(message);
-  Serial.println(message);  // Mostra anche nel monitor seriale
+  Serial.println(message);
 }
 
 bool ELMinit() {
