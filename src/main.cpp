@@ -35,7 +35,7 @@ BluetoothSerial ELM_PORT;
 bool counter = false;
 volatile bool buttonPressed = false;
 unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 50;
+unsigned long debounceDelay = 100;
 
 // Variabili per touch (Core2)
 #ifdef USE_TOUCH_BUTTONS
@@ -59,6 +59,7 @@ void drawTouchButtons(); // Per Core2
 // funzioni lcd
 void mainScreen();
 void runningScreen();
+void coolantScreen();
 void rpmScreen();
 void engineLoadScreen();
 void mafScreen();
@@ -102,6 +103,8 @@ float dtcStatus = 0.0;
 bool firstMainScreen = true;
 bool firstRunningScreen = true;
 bool firstEngineScreen = true;
+bool firstRpmScreen = true;
+bool firstCoolantScreen = true;
 bool firstBarScreen = true;
 bool firstMafScreen = true;
 
@@ -115,12 +118,11 @@ const int BUFFER_SIZE = 256;
 char circularBuffer[BUFFER_SIZE];
 int writeIndex = 0;
 int readIndex = 0;
-int screenIndex[5] = {0, 1, 2, 3, 4};
+int screenIndex[7] = {0, 1, 2, 3, 4, 5, 6};
 int z = 1;
 int zLast = -1;
 
 void setup() {
-  // Init M5Unified
   auto cfg = M5.config();
   M5.begin(cfg);
   
@@ -137,7 +139,7 @@ void setup() {
   drawTouchButtons();
 #else
   Serial.println("M5Stack Core detected - Using physical buttons");
-  //pinMode(ButtonA, INPUT);
+  //pinMode(ButtonA, INPUT); //non è possibile collegare un interrupt
   pinMode(ButtonB, INPUT);
   pinMode(ButtonC, INPUT);
   
@@ -171,9 +173,11 @@ void loop() {
   switch (screenIndex[z]) {
     case 0: mainScreen(); break;
     case 1: runningScreen(); break;
-    case 2: engineLoadScreen(); break;
-    case 3: barometricScreen(); break;
-    case 4: mafScreen(); break;
+    case 2: coolantScreen();
+    case 3: rpmScreen(); break;
+    case 4: engineLoadScreen(); break;
+    case 5: barometricScreen(); break;
+    case 6: mafScreen(); break;
   }
 
 coolantTemp = coolantTemp + 1;
@@ -227,7 +231,6 @@ void mainScreen() {
 
 void runningScreen() {
   // stato primo disegno e ultimi valori
-//  static bool  firstDraw        = true;
   static float lastLoad         = -999, lastCoolant = -999, lastIntake = -999;
 
   // soglie di tacca per ciascuna barra
@@ -254,12 +257,12 @@ void runningScreen() {
   if (firstRunningScreen) {
     M5.Display.fillScreen(BLACK);
     M5.Display.setTextSize(2);
-    M5.Display.setTextColor(WHITE);
+    M5.Display.setTextColor(LIGHTGREY);
 
     // etichette
-    M5.Display.setCursor(marginX,    yLoad    - titleH); M5.Display.print("Load   %");
-    M5.Display.setCursor(marginX,    yCoolant - titleH); M5.Display.print("Coolant C");
-    M5.Display.setCursor(marginX,    yIntake  - titleH); M5.Display.print("Air   \u00B0C");
+    M5.Display.setCursor(marginX,    yLoad    - titleH); M5.Display.print("Carico Motore %");
+    M5.Display.setCursor(marginX,    yCoolant - titleH); M5.Display.print("Temperatura radiatore C");
+    M5.Display.setCursor(marginX,    yIntake  - titleH); M5.Display.print("Temperatura aspirazione C");
 
     // cornici
     M5.Display.drawRect(marginX, yLoad,    barW, barH, LIGHTGREY);
@@ -271,6 +274,8 @@ void runningScreen() {
     firstEngineScreen = true;
     firstBarScreen = true;
     firstMafScreen = true;
+    firstRpmScreen = true;
+    firstCoolantScreen = true;
   }
 
   // letture OBD
@@ -522,7 +527,7 @@ float parseRPM(const String& response) {
 float parseEngineLoad(const String& response) {
   if (response.indexOf("4104") == 0) {
     byte loadByte = strtoul(response.substring(4, 6).c_str(), NULL, 16);
-    return (loadByte * 100.0) / 255.0;
+    return ((loadByte * 100.0) / 255.0)*1.2; // 1.2 per questioni grafiche DA RIVEDERE
   }
   return lastEngineLoad;
 }
@@ -581,11 +586,14 @@ void updateDisplay() {
     drawTouchButtons();
 #endif
     
-    firstMainScreen = false;
+    // Reset flag globali
+    firstMainScreen    = false;
     firstRunningScreen = true;
-    firstEngineScreen = true;
-    firstBarScreen = true;
-    firstMafScreen = true;
+    firstEngineScreen  = true;
+    firstBarScreen     = true;
+    firstMafScreen     = true;
+    firstRpmScreen     = true;
+    firstCoolantScreen = true;
   }
 
   if (coolantTemp != lastCoolantTemp) {
@@ -739,77 +747,600 @@ String readFromCircularBuffer(int numChars) {
   return result;
 }
 
-void rpmScreen() {
-  sendOBDCommand(PID_RPM);
-  delay(20);
-  handleOBDResponse();
-  M5.Display.fillScreen(BLACK);
-  M5.Display.setTextSize(3);
-  M5.Display.setTextColor(WHITE);
-  M5.Display.setCursor(10, 10);
-  M5.Display.printf("RPM: %.0f", rpm);
-#ifdef USE_TOUCH_BUTTONS
-  drawTouchButtons();
-#endif
-}
-
 void engineLoadScreen() {
+  // Richiesta OBD e lettura
   sendOBDCommand(PID_ENGINE_LOAD);
   delay(20);
   handleOBDResponse();
-  if(firstEngineScreen) {
-    M5.Display.fillScreen(BLACK);
-#ifdef USE_TOUCH_BUTTONS
+
+  // Parametri gauge
+  const int cx     = 160;    // centro X
+  const int cy     = 140;    // centro Y
+  const int radius = 100;    // raggio esterno
+
+  // Stato primo disegno gauge e lancetta precedente
+  static bool firstDrawGauge = true;
+  static int  lastX = cx, lastY = cy - (radius - 15);
+
+  // Buffer per effetto “scia”
+  const int TRAIL_LEN = 5;
+  static int histX[TRAIL_LEN], histY[TRAIL_LEN];
+  static int histCnt = 0, histIdx = 0;
+
+  if (firstEngineScreen) {
+    // Inizializza display
+    M5.Lcd.fillScreen(BLACK);
+  #ifdef USE_TOUCH_BUTTONS
     drawTouchButtons();
-#endif
-    firstMainScreen = true;
+  #endif
+
+    // Titolo
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setCursor(cx - 30, 10);
+    M5.Lcd.print("Load %");
+
+    // Disegna zone colorate (semicerchio –90°…+90°)
+    for (int v = 0; v <= 100; v++) {
+      int angDeg = map(v, 0, 100, -90, 90);
+      float ang  = angDeg * PI / 180.0f;
+      uint16_t col;
+      if (v <= 33)        col = GREEN;
+      else if (v <= 66)   col = YELLOW;
+      else                col = RED;
+
+      int x1 = cx + cos(ang) * radius;
+      int y1 = cy + sin(ang) * radius;
+      int x2 = cx + cos(ang) * (radius - 12);
+      int y2 = cy + sin(ang) * (radius - 12);
+      M5.Lcd.drawLine(x1, y1, x2, y2, col);
+    }
+
+    // Interno gauge (sfondo nero)
+    M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
+
+    // Tacche ogni 10 unità
+    for (int v = 0; v <= 100; v += 10) {
+      float ang = map(v, 0, 100, -90, 90) * PI / 180.0f;
+      int x1 = cx + cos(ang) * (radius - 12);
+      int y1 = cy + sin(ang) * (radius - 12);
+      int x2 = cx + cos(ang) * radius;
+      int y2 = cy + sin(ang) * radius;
+      M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
+    }
+
+    // Numeri ogni 20 unità
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE);
+    for (int v = 0; v <= 100; v += 20) {
+      float ang = map(v, 0, 100, -90, 90) * PI / 180.0f;
+      int xt = cx + cos(ang) * (radius - 28) - 10;
+      int yt = cy + sin(ang) * (radius - 28) - 8;
+      M5.Lcd.setCursor(xt, yt);
+      M5.Lcd.printf("%d", v);
+    }
+
+    // Reset global flags
+    firstMainScreen    = true;
     firstRunningScreen = true;
-    firstEngineScreen = false;
-    firstBarScreen = true;
-    firstMafScreen = true;
+    firstEngineScreen  = false;
+    firstBarScreen     = true;
+    firstMafScreen     = true;
+    firstRpmScreen     = true;
+    firstCoolantScreen = true;
+    firstDrawGauge     = false;
   }
-  M5.Display.setTextSize(3);
-  M5.Display.setTextColor(WHITE);
-  M5.Display.setCursor(10, 10);
-  M5.Display.printf("Engine Load: %.1f%%", engineLoad);
+
+  // Cancella scia precedente
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], BLACK);
+  }
+  // Cancella vecchia lancetta
+  M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
+
+  // Calcola nuova posizione lancetta
+  int angleDeg = map((int)engineLoad, 0, 100, -90, 90);
+  float rad    = angleDeg * PI / 180.0f;
+  int nx = cx + cos(rad) * (radius - 15);
+  int ny = cy + sin(rad) * (radius - 15);
+
+  // Aggiorna buffer scia
+  histX[histIdx] = nx;
+  histY[histIdx] = ny;
+  if (histCnt < TRAIL_LEN) histCnt++;
+  histIdx = (histIdx + 1) % TRAIL_LEN;
+
+  // Disegna scia (verde sfumato)
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    float t = float(i + 1) / histCnt;           // t piccolo = più vecchio
+    uint8_t g = uint8_t(t * 255);               // intensità verde
+    uint16_t col = M5.Lcd.color565(0, g, 0);
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], col);
+  }
+
+  // Disegna lancetta attuale (rosso)
+  M5.Lcd.drawLine(cx, cy, nx, ny, RED);
+  lastX = nx;
+  lastY = ny;
+
+  // Mostra valore numerico al centro
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+  M5.Lcd.setCursor(cx - 30, cy - 15);
+  M5.Lcd.printf("%3.0f%%", engineLoad);
 }
 
+// Assicurati che esista il flag globale:
+// bool firstCoolantScreen = true;
+
+void coolantScreen() {
+  // Richiesta OBD e lettura coolantTemp
+  sendOBDCommand(PID_COOLANT_TEMP);
+  delay(20);
+  handleOBDResponse();
+
+  // Parametri gauge
+  const int cx       = 160;    // centro X
+  const int cy       = 140;    // centro Y
+  const int radius   = 100;    // raggio esterno
+  const int maxValue = 130;    // valore massimo (°C)
+
+  // Lancetta precedente
+  static int lastX = cx, lastY = cy - (radius - 15);
+
+  // Buffer scia (ultime 5 posizioni)
+  const int TRAIL_LEN = 5;
+  static int histX[TRAIL_LEN], histY[TRAIL_LEN];
+  static int histCnt = 0, histIdx = 0;
+
+  // Disegno iniziale del gauge
+  if (firstCoolantScreen) {
+    M5.Lcd.fillScreen(BLACK);
+  #ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+  #endif
+
+    // Titolo
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setCursor(cx - 50, 10);
+    M5.Lcd.print("Coolant");
+
+    // Semicerchio colorato da -90° a +90°
+    for (int v = 0; v <= maxValue; v++) {
+      int angDeg = map(v, 0, maxValue, -90, 90);
+      float ang  = angDeg * PI / 180.0f;
+      uint16_t col;
+      if      (v <=  60) col = BLUE;
+      else if (v <=  80) col = CYAN;
+      else if (v <= 100) col = GREEN;
+      else if (v <= 107) col = GREENYELLOW;
+      else if (v <= 111) col = YELLOW;
+      else               col = RED;
+
+      int x1 = cx + cos(ang) * radius;
+      int y1 = cy + sin(ang) * radius;
+      int x2 = cx + cos(ang) * (radius - 12);
+      int y2 = cy + sin(ang) * (radius - 12);
+      M5.Lcd.drawLine(x1, y1, x2, y2, col);
+    }
+
+    // Interno del gauge
+    M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
+
+    // Tacche ogni 10 °C
+    for (int v = 0; v <= maxValue; v += 10) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int x1 = cx + cos(ang) * (radius - 12);
+      int y1 = cy + sin(ang) * (radius - 12);
+      int x2 = cx + cos(ang) * radius;
+      int y2 = cy + sin(ang) * radius;
+      M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
+    }
+
+    // Numeri ogni 20 °C
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE);
+    for (int v = 0; v <= maxValue; v += 20) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int xt = cx + cos(ang) * (radius - 28) - 10;
+      int yt = cy + sin(ang) * (radius - 28) - 8;
+      M5.Lcd.setCursor(xt, yt);
+      M5.Lcd.printf("%d", v);
+    }
+
+    // Reset dei flag globali
+    firstMainScreen    = true;
+    firstRunningScreen = true;
+    firstEngineScreen  = true;
+    firstBarScreen     = true;
+    firstMafScreen     = true;
+    firstRpmScreen     = true;
+    firstCoolantScreen = false;
+  }
+
+  // Cancella scia precedente
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], BLACK);
+  }
+  // Cancella vecchia lancetta
+  M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
+
+  // Calcola nuova posizione lancetta
+  int angleDeg = map((int)coolantTemp, 0, maxValue, -90, 90);
+  float rad    = angleDeg * PI / 180.0f;
+  int nx = cx + cos(rad) * (radius - 15);
+  int ny = cy + sin(rad) * (radius - 15);
+
+  // Aggiorna buffer scia
+  histX[histIdx] = nx;
+  histY[histIdx] = ny;
+  if (histCnt < TRAIL_LEN) histCnt++;
+  histIdx = (histIdx + 1) % TRAIL_LEN;
+
+  // Disegna scia (5 tratti verdi sfumati)
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    float t = float(i + 1) / histCnt;            // più vecchio → t piccolo
+    uint8_t g = uint8_t(t * 255);                // intensità verde
+    uint16_t col = M5.Lcd.color565(0, g, 0);
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], col);
+  }
+
+  // Disegna lancetta attuale (rossa)
+  M5.Lcd.drawLine(cx, cy, nx, ny, RED);
+  lastX = nx;
+  lastY = ny;
+
+  // Valore numerico al centro
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+  M5.Lcd.setCursor(cx - 30, cy - 15);
+  M5.Lcd.printf("%3.0f°C", coolantTemp);
+}
+
+
 void mafScreen() {
+  // Richiesta OBD e lettura MAF
   sendOBDCommand(PID_MAF);
   delay(20);
   handleOBDResponse();
 
-  if(firstMafScreen){
-     M5.Lcd.fillScreen(BLACK);
-    firstMainScreen = true;
+  // Parametri gauge
+  const int cx       = 160;    // centro X
+  const int cy       = 140;    // centro Y
+  const int radius   = 100;    // raggio esterno
+  const int maxValue = 200;    // valore massimo gauge (g/s)
+
+  // Flag primo draw e posizione lancetta precedente
+  static bool firstDrawGauge = true;
+  static int  lastX = cx, lastY = cy - (radius - 15);
+
+  // Inizializzazione schermo e sfondo gauge
+  if (firstMafScreen) {
+    M5.Lcd.fillScreen(BLACK);
+#ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+#endif
+
+    // Stampa titolo in alto
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setCursor(cx - 30, 10);
+    M5.Lcd.print("MAF  g/s");
+
+    // Reset flag globali
+    firstMainScreen    = true;
     firstRunningScreen = true;
-    firstEngineScreen = true;
-    firstBarScreen = true;
-    firstMafScreen = false;
+    firstEngineScreen  = true;
+    firstBarScreen     = true;
+    firstMafScreen     = false;
+    firstRpmScreen     = false;
+    firstCoolantScreen = true;
+
+    // Disegna cerchio esterno e interno
+    M5.Lcd.fillCircle(cx, cy, radius, LIGHTGREY);
+    M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
+
+    // Tacche ogni 20 g/s da –90° a +90°
+    for (int v = 0; v <= maxValue; v += 20) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int x1 = cx + cos(ang) * (radius - 12);
+      int y1 = cy + sin(ang) * (radius - 12);
+      int x2 = cx + cos(ang) * radius;
+      int y2 = cy + sin(ang) * radius;
+      M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
+    }
+
+    // Etichette valori ogni 40 g/s
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE);
+    for (int v = 0; v <= maxValue; v += 40) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int xt = cx + cos(ang) * (radius - 28) - 10;
+      int yt = cy + sin(ang) * (radius - 28) - 8;
+      M5.Lcd.setCursor(xt, yt);
+      M5.Lcd.printf("%d", v);
+    }
+
+    firstDrawGauge = false;
   }
+
+  // Cancella vecchia lancetta
+  M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
+
+  // Calcola e disegna nuova lancetta (verde)
+  int angleDeg = map((int)MAF, 0, maxValue, -90, 90);
+  float rad    = angleDeg * PI / 180.0f;
+  int nx = cx + cos(rad) * (radius - 15);
+  int ny = cy + sin(rad) * (radius - 15);
+  M5.Lcd.drawLine(cx, cy, nx, ny, GREEN);
+
+  lastX = nx;
+  lastY = ny;
+
+  // Mostra valore numerico al centro
   M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("MAF: %.1f g/s", MAF);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+  M5.Lcd.setCursor(cx - 50, cy - 15);
+  M5.Lcd.printf("%5.1f", MAF);
 }
 
+
+// ----------------------------------------------------------------------------
+// Barometric Pressure Gauge (0…150 kPa, verde/ giallo/ rosso, 5 scie)
+// ----------------------------------------------------------------------------
 void barometricScreen() {
+  // Richiesta OBD e lettura
   sendOBDCommand(PID_BAROMETRIC_PRESSURE);
   delay(20);
   handleOBDResponse();
-  if(firstBarScreen){
-    M5.Lcd.fillScreen(DARKGREY);
-    firstMainScreen = true;
+
+  // Parametri gauge
+  const int cx       = 160;    // centro X
+  const int cy       = 140;    // centro Y
+  const int radius   = 100;    // raggio esterno
+  const int maxValue = 150;    // valore massimo (kPa)
+
+  // Lancetta precedente
+  static int lastX = cx, lastY = cy - (radius - 15);
+  // Buffer scia (ultime 5 posizioni)
+  const int TRAIL_LEN = 5;
+  static int histX[TRAIL_LEN], histY[TRAIL_LEN];
+  static int histCnt = 0, histIdx = 0;
+
+  // Disegno iniziale del gauge
+  if (firstBarScreen) {
+    M5.Lcd.fillScreen(BLACK);
+  #ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+  #endif
+
+    // Titolo
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setCursor(cx - 60, 10);
+    M5.Lcd.print("Baro kPa");
+
+    // Semicerchio colorato da -90° a +90°
+    for (int v = 0; v <= maxValue; v++) {
+      int angDeg = map(v, 0, maxValue, -90, 90);
+      float ang  = angDeg * PI / 180.0f;
+      uint16_t col;
+      if (v <= 80)       col = GREEN;   // normale
+      else if (v <= 100) col = YELLOW;  // warning
+      else               col = RED;     // alto
+
+      int x1 = cx + cos(ang) * radius;
+      int y1 = cy + sin(ang) * radius;
+      int x2 = cx + cos(ang) * (radius - 12);
+      int y2 = cy + sin(ang) * (radius - 12);
+      M5.Lcd.drawLine(x1, y1, x2, y2, col);
+    }
+
+    // Interno nero
+    M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
+
+    // Tacche ogni 10 kPa
+    for (int v = 0; v <= maxValue; v += 10) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int x1 = cx + cos(ang) * (radius - 12);
+      int y1 = cy + sin(ang) * (radius - 12);
+      int x2 = cx + cos(ang) * radius;
+      int y2 = cy + sin(ang) * radius;
+      M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
+    }
+
+    // Numeri ogni 25 kPa
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE);
+    for (int v = 0; v <= maxValue; v += 25) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int xt = cx + cos(ang) * (radius - 28) - 10;
+      int yt = cy + sin(ang) * (radius - 28) - 8;
+      M5.Lcd.setCursor(xt, yt);
+      M5.Lcd.printf("%d", v);
+    }
+
+    // Reset flag globali
+    firstMainScreen    = true;
     firstRunningScreen = true;
-    firstEngineScreen = true;
-    firstBarScreen = false;
-    firstMafScreen = true;
+    firstEngineScreen  = true;
+    firstBarScreen     = false;
+    firstMafScreen     = true;
+    firstRpmScreen     = true;
+    firstCoolantScreen = true;
   }
+
+  // Cancella scia e lancetta precedenti
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], BLACK);
+  }
+  M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
+
+  // Calcola nuova posizione lancetta
+  int angleDeg = map((int)barometricPressure, 0, maxValue, -90, 90);
+  float rad    = angleDeg * PI / 180.0f;
+  int nx = cx + cos(rad) * (radius - 15);
+  int ny = cy + sin(rad) * (radius - 15);
+
+  // Aggiorna buffer scia
+  histX[histIdx] = nx;
+  histY[histIdx] = ny;
+  if (histCnt < TRAIL_LEN) histCnt++;
+  histIdx = (histIdx + 1) % TRAIL_LEN;
+
+  // Disegna scia (5 tratti verdi sfumati)
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    float t = float(i + 1) / histCnt;         // più vecchio → t piccolo
+    uint8_t g = uint8_t(t * 255);             // intensità verde
+    uint16_t col = M5.Lcd.color565(0, g, 0);
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], col);
+  }
+
+  // Disegna lancetta attuale (rossa)
+  M5.Lcd.drawLine(cx, cy, nx, ny, RED);
+  lastX = nx;
+  lastY = ny;
+
+  // Valore numerico al centro
   M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("Bar kPa: %.1f kPa", barometricPressure);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+  M5.Lcd.setCursor(cx - 40, cy - 15);
+  M5.Lcd.printf("%5.1f kPa", barometricPressure);
 }
+
+// ----------------------------------------------------------------------------
+// RPM Gauge (0…8000 rpm, verde/ giallo/ rosso, 5 scie)
+// ----------------------------------------------------------------------------
+void rpmScreen() {
+  // Richiesta OBD e lettura
+  sendOBDCommand(PID_RPM);
+  delay(20);
+  handleOBDResponse();
+
+  // Parametri gauge
+  const int cx       = 160;    // centro X
+  const int cy       = 140;    // centro Y
+  const int radius   = 100;    // raggio esterno
+  const int maxValue = 8000;   // valore massimo (rpm)
+
+  // Lancetta precedente
+  static int lastX = cx, lastY = cy - (radius - 15);
+  // Buffer scia (ultime 5 posizioni)
+  const int TRAIL_LEN = 5;
+  static int histX[TRAIL_LEN], histY[TRAIL_LEN];
+  static int histCnt = 0, histIdx = 0;
+
+  // Disegno iniziale del gauge
+  if (firstRpmScreen) {
+    M5.Lcd.fillScreen(BLACK);
+  #ifdef USE_TOUCH_BUTTONS
+    drawTouchButtons();
+  #endif
+
+    // Titolo
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setCursor(cx - 40, 10);
+    M5.Lcd.print("RPM");
+
+    // Semicerchio colorato da -90° a +90°
+    for (int v = 0; v <= maxValue; v += 50) {
+      int angDeg = map(v, 0, maxValue, -90, 90);
+      float ang  = angDeg * PI / 180.0f;
+      uint16_t col;
+      if (v <= 3000)     col = GREEN;
+      else if (v <= 6000)col = YELLOW;
+      else               col = RED;
+
+      int x1 = cx + cos(ang) * radius;
+      int y1 = cy + sin(ang) * radius;
+      int x2 = cx + cos(ang) * (radius - 12);
+      int y2 = cy + sin(ang) * (radius - 12);
+      M5.Lcd.drawLine(x1, y1, x2, y2, col);
+    }
+
+    // Interno nero
+    M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
+
+    // Tacche ogni 1000 rpm
+    for (int v = 0; v <= maxValue; v += 1000) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int x1 = cx + cos(ang) * (radius - 12);
+      int y1 = cy + sin(ang) * (radius - 12);
+      int x2 = cx + cos(ang) * radius;
+      int y2 = cy + sin(ang) * radius;
+      M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
+    }
+
+    // Numeri ogni 2000 rpm
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE);
+    for (int v = 0; v <= maxValue; v += 2000) {
+      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      int xt = cx + cos(ang) * (radius - 28) - 15;
+      int yt = cy + sin(ang) * (radius - 28) - 8;
+      M5.Lcd.setCursor(xt, yt);
+      M5.Lcd.printf("%d", v);
+    }
+
+    // Reset flag globali
+    firstMainScreen    = true;
+    firstRunningScreen = true;
+    firstEngineScreen  = true;
+    firstBarScreen     = true;
+    firstMafScreen     = true;
+    firstRpmScreen     = false;
+    firstCoolantScreen = true;
+  }
+
+  // Cancella scia e lancetta precedenti
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], BLACK);
+  }
+  M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
+
+  // Calcola nuova posizione lancetta
+  int angleDeg = map((int)rpm, 0, maxValue, -90, 90);
+  float rad    = angleDeg * PI / 180.0f;
+  int nx = cx + cos(rad) * (radius - 15);
+  int ny = cy + sin(rad) * (radius - 15);
+
+  // Aggiorna buffer scia
+  histX[histIdx] = nx;
+  histY[histIdx] = ny;
+  if (histCnt < TRAIL_LEN) histCnt++;
+  histIdx = (histIdx + 1) % TRAIL_LEN;
+
+  // Disegna scia (5 tratti verdi sfumati)
+  for (int i = 0; i < histCnt; i++) {
+    int idx = (histIdx + i) % TRAIL_LEN;
+    float t = float(i + 1) / histCnt;
+    uint8_t g = uint8_t(t * 255);
+    uint16_t col = M5.Lcd.color565(0, g, 0);
+    M5.Lcd.drawLine(cx, cy, histX[idx], histY[idx], col);
+  }
+
+  // Disegna lancetta attuale (rossa)
+  M5.Lcd.drawLine(cx, cy, nx, ny, RED);
+  lastX = nx;
+  lastY = ny;
+
+  // Valore numerico al centro
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextColor(WHITE, BLACK);
+  M5.Lcd.setCursor(cx - 30, cy - 15);
+  M5.Lcd.printf("%4.0f", rpm);
+}
+
+
 
 void dtcStatusScreen() {
   sendOBDCommand(PID_DTC_STATUS);
