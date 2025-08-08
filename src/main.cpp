@@ -262,7 +262,7 @@ void runningScreen() {
     M5.Lcd.print("RPM");
 
     // Semicerchio colorato da -90° a +90°
-    for (int v = 0; v <= maxRpmValue; v++) {
+    for (int v = 0; v <= maxRpmValue; v = v +250) {
       int angDeg = map(v, 0, maxRpmValue, -90, 90);
       float ang  = angDeg * PI / 180.0f;
       uint16_t col;
@@ -277,7 +277,7 @@ void runningScreen() {
       M5.Lcd.drawLine(x1, y1, x2, y2, col);
     }
 
-    for (int v = 0; v <= maxCoolantValue; v++) {
+    for (int v = 0; v <= maxCoolantValue; v = v + 10) {
       int angDeg = map(v, 0, maxCoolantValue, -270, -90);
       float ang  = angDeg * PI / 180.0f;
       uint16_t col;
@@ -315,8 +315,9 @@ void runningScreen() {
       int yt = cy + sin(ang) * (radius - 28) - 8;
       M5.Lcd.drawNumber(v, xt, yt);
     }
+
 //CERCHIO PER COOLANT
-    for (int v = 0; v <= maxCoolantValue; v += 20) {
+    for (float v = 0; v <= maxCoolantValue; v += 20) {
       float ang = map(v, 0, maxCoolantValue, -270, -90) * PI / 180.0f;
       int xt = cxCool + cos(ang) * (radius - 28) - 10;
       int yt = cy + sin(ang) * (radius - 28) - 8;
@@ -404,6 +405,23 @@ void runningScreen() {
   lastCoolantX = nxCoolant;
   lastCoolantY = nyCoolant;
 
+M5.Lcd.setTextSize(2);
+  
+  if(coolantTemp <= 30)        M5.Lcd.setTextColor(BLUE, BLACK);
+  else if (coolantTemp <= 60)  M5.Lcd.setTextColor(CYAN, BLACK);
+  else if (coolantTemp <= 100) M5.Lcd.setTextColor(GREEN, BLACK);
+  else if (coolantTemp <= 107) M5.Lcd.setTextColor(GREENYELLOW, BLACK);
+  else if (coolantTemp <= 111) M5.Lcd.setTextColor(YELLOW, BLACK);
+  else                         M5.Lcd.setTextColor(RED, BLACK);
+
+  if(rpm <= 3000)      M5.Lcd.setTextColor(GREEN, BLACK);
+  else if(rpm <= 4000) M5.Lcd.setTextColor(GREENYELLOW, BLACK);
+  else if(rpm <= 5000) M5.Lcd.setTextColor(YELLOW, BLACK);
+  else if(rpm <= 6000) M5.Lcd.setTextColor(ORANGE, BLACK);
+  else                 M5.Lcd.setTextColor(RED, BLACK);
+
+  M5.Lcd.drawNumber(coolantTemp, cxCool - 5, cy + 20);
+  M5.Lcd.drawNumber(rpm, cxRpm - 5, cy + 20);
 
 
 }
@@ -832,7 +850,7 @@ void coolantScreen() {
     M5.Lcd.print("Coolant");
 
     // Semicerchio colorato da -90° a +90°
-    for (int v = 0; v <= maxValue; v++) {
+    for (int v = 0; v <= maxValue; v = v + 2) {
       int angDeg = map(v, 0, maxValue, -225, 55);
       float ang  = angDeg * PI / 180.0f;
       uint16_t col;
@@ -854,6 +872,7 @@ void coolantScreen() {
     M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
 
     // Tacche ogni 5 °C
+/*
     for (int v = 0; v <= maxValue; v += 5) {
       float ang = map(v, 0, maxValue, -225, 55) * PI / 180.0f;
       int x1 = cx + cos(ang) * (radius - 12);
@@ -862,7 +881,8 @@ void coolantScreen() {
       int y2 = cy + sin(ang) * radius;
       M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
     }
-
+*/
+    
     // Numeri ogni 20 °C
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(WHITE);
