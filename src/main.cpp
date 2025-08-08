@@ -170,16 +170,16 @@ void loop() {
     case 6: mafScreen(); break;
   }
 
-/*  
+  
 // PER DEBUG
-Serial.println(z);
+//Serial.println(z);
 coolantTemp = coolantTemp + 1;
 intakeTemp = intakeTemp + 1;
 rpm = rpm + 1;
 obdVoltage = obdVoltage + 1;
 engineLoad = engineLoad + 1;
 MAF = MAF + 1;
-*/
+
 }
 
 void handleInput() {
@@ -269,9 +269,9 @@ void runningScreen() {
     firstCoolantScreen = true;
   }
 
-  sendOBDCommand(PID_ENGINE_LOAD);     handleOBDResponse();  // engineLoad (0–100)
-  sendOBDCommand(PID_COOLANT_TEMP);    handleOBDResponse();  // coolantTemp (0–130)
-  sendOBDCommand(PID_AIR_INTAKE_TEMP); handleOBDResponse();  // intakeTemp (0–50)
+  sendOBDCommand(PID_ENGINE_LOAD);     delay(50); handleOBDResponse();  // engineLoad (0–100)
+  sendOBDCommand(PID_COOLANT_TEMP);    delay(50); handleOBDResponse();  // coolantTemp (0–130)
+  sendOBDCommand(PID_AIR_INTAKE_TEMP); delay(50); handleOBDResponse();  // intakeTemp (0–50)
 
   if (engineLoad != lastLoad) {
     int w = map(engineLoad, 0, 100, 0, barW);
@@ -283,13 +283,16 @@ void runningScreen() {
     M5.Display.fillRect(marginX+1, yLoad+1, w,           barH-2, c);
     // 2) pulisci resto in nero
     M5.Display.fillRect(marginX+1 + w, yLoad+1, barW-w-1, barH-2, BLACK);
-    // 3) disegna solo le tacche coperte dal riempimento
+
+  // 3) disegna solo le tacche coperte dal riempimento
+  /*
     for (uint8_t i = 0; i < loadCount; i++) {
       int x = marginX + map(loadTicks[i], 0, 100, 0, barW);
       if (x <= marginX + w) {
         M5.Display.drawFastVLine(x, yLoad+1, barH-2, BLACK);
       }
     }
+  */
     // testo
     M5.Display.setTextSize(2);
     M5.Display.setTextColor(WHITE);
@@ -744,7 +747,7 @@ void coolantScreen() {
   const int cx       = 160;    // centro X
   const int cy       = 140;    // centro Y
   const int radius   = 100;    // raggio esterno
-  const int maxValue = 130;    // valore massimo (°C)
+  const int maxValue = 140;    // valore massimo (°C)
 
   // Lancetta precedente
   static int lastX = cx, lastY = cy - (radius - 15);
@@ -763,17 +766,17 @@ void coolantScreen() {
 
     // Titolo
     M5.Lcd.setTextSize(3);
-    M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.setCursor(cx - 50, 10);
+    M5.Lcd.setTextColor(LIGHTGREY);
+    M5.Lcd.setCursor(cx - 70, 10);
     M5.Lcd.print("Coolant");
 
     // Semicerchio colorato da -90° a +90°
     for (int v = 0; v <= maxValue; v++) {
-      int angDeg = map(v, 0, maxValue, -90, 90);
+      int angDeg = map(v, 0, maxValue, -225, 55);
       float ang  = angDeg * PI / 180.0f;
       uint16_t col;
-      if      (v <=  60) col = BLUE;
-      else if (v <=  80) col = CYAN;
+      if      (v <=  30) col = BLUE;
+      else if (v <=  60) col = CYAN;
       else if (v <= 100) col = GREEN;
       else if (v <= 107) col = GREENYELLOW;
       else if (v <= 111) col = YELLOW;
@@ -789,9 +792,9 @@ void coolantScreen() {
     // Interno del gauge
     M5.Lcd.fillCircle(cx, cy, radius - 12, BLACK);
 
-    // Tacche ogni 10 °C
-    for (int v = 0; v <= maxValue; v += 10) {
-      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+    // Tacche ogni 5 °C
+    for (int v = 0; v <= maxValue; v += 5) {
+      float ang = map(v, 0, maxValue, -225, 55) * PI / 180.0f;
       int x1 = cx + cos(ang) * (radius - 12);
       int y1 = cy + sin(ang) * (radius - 12);
       int x2 = cx + cos(ang) * radius;
@@ -803,7 +806,7 @@ void coolantScreen() {
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(WHITE);
     for (int v = 0; v <= maxValue; v += 20) {
-      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      float ang = map(v, 0, maxValue, -225, 55) * PI / 180.0f;
       int xt = cx + cos(ang) * (radius - 28) - 10;
       int yt = cy + sin(ang) * (radius - 28) - 8;
       M5.Lcd.drawNumber(v, xt, yt);
@@ -828,7 +831,7 @@ void coolantScreen() {
   M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
 
   // Calcola nuova posizione lancetta
-  int angleDeg = map((int)coolantTemp, 0, maxValue, -90, 90);
+  int angleDeg = map((int)coolantTemp, 0, maxValue, -225, 45);
   float rad    = angleDeg * PI / 180.0f;
   int nx = cx + cos(rad) * (radius - 15);
   int ny = cy + sin(rad) * (radius - 15);
@@ -853,10 +856,17 @@ void coolantScreen() {
   lastX = nx;
   lastY = ny;
 
-  // Valore numerico al centro
+  // Valore numerico 
   M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE, BLACK);
-  M5.Lcd.drawNumber(coolantTemp, cx - 30, cy - 15);
+  
+  if(coolantTemp <= 30)        M5.Lcd.setTextColor(BLUE, BLACK);
+  else if (coolantTemp <= 60)  M5.Lcd.setTextColor(CYAN, BLACK);
+  else if (coolantTemp <= 100) M5.Lcd.setTextColor(GREEN, BLACK);
+  else if (coolantTemp <= 107) M5.Lcd.setTextColor(GREENYELLOW, BLACK);
+  else if (coolantTemp <= 111) M5.Lcd.setTextColor(YELLOW, BLACK);
+  else                         M5.Lcd.setTextColor(RED, BLACK);
+
+  M5.Lcd.drawNumber(coolantTemp, cx - 30, cy + 70);
 }
 
 void engineLoadScreen() {
@@ -1229,8 +1239,8 @@ void rpmScreen() {
 
   // Lancetta precedente
   static int lastX = cx, lastY = cy - (radius - 15);
-  // Buffer scia (ultime 5 posizioni)
-  const int TRAIL_LEN = 5;
+  // Buffer scia (ultime 10 posizioni)
+  const int TRAIL_LEN = 10;
   static int histX[TRAIL_LEN], histY[TRAIL_LEN];
   static int histCnt = 0, histIdx = 0;
 
@@ -1243,17 +1253,19 @@ void rpmScreen() {
 
     // Titolo
     M5.Lcd.setTextSize(3);
-    M5.Lcd.setTextColor(WHITE);
+    M5.Lcd.setTextColor(LIGHTGREY);
     M5.Lcd.setCursor(cx - 100, 10);
-    M5.Lcd.print("RPM/min x1000");
+    M5.Lcd.print("RPM/min x100");
 
     // Semicerchio colorato da -90° a +90°
     for (int v = 0; v <= maxValue; v += 50) {
-      int angDeg = map(v, 0, maxValue, -90, 90);
+      int angDeg = map(v, 0, maxValue, -225, 45);
       float ang  = angDeg * PI / 180.0f;
       uint16_t col;
       if (v <= 3000)     col = GREEN;
-      else if (v <= 6000)col = YELLOW;
+      else if (v <= 4000)col = GREENYELLOW;
+      else if (v <= 5000)col = YELLOW;
+      else if (v <= 6000)col = ORANGE;
       else               col = RED;
 
       int x1 = cx + cos(ang) * radius;
@@ -1268,7 +1280,7 @@ void rpmScreen() {
 
     // Tacche ogni 1000 rpm
     for (int v = 0; v <= maxValue; v += 1000) {
-      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
+      float ang = map(v, 0, maxValue, -225, 45) * PI / 180.0f;
       int x1 = cx + cos(ang) * (radius - 12);
       int y1 = cy + sin(ang) * (radius - 12);
       int x2 = cx + cos(ang) * radius;
@@ -1276,14 +1288,14 @@ void rpmScreen() {
       M5.Lcd.drawLine(x1, y1, x2, y2, WHITE);
     }
 
-    // Numeri ogni 2000 rpm
+    // Numeri ogni 1000 rpm
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(WHITE);
-    for (int v = 0; v <= maxValue; v += 2000) {
-      float ang = map(v, 0, maxValue, -90, 90) * PI / 180.0f;
-      int xt = cx + cos(ang) * (radius - 28) - 15;
+    for (int v = 0; v <= maxValue; v += 1000) {
+      float ang = map(v, 0, maxValue, -225, 45) * PI / 180.0f;
+      int xt = cx + cos(ang) * (radius - 28) - 10;
       int yt = cy + sin(ang) * (radius - 28) - 8;
-      M5.Lcd.drawNumber(v/1000, xt, yt);
+      M5.Lcd.drawNumber(v/100, xt, yt);
     }
 
     // Reset flag globali
@@ -1304,7 +1316,7 @@ void rpmScreen() {
   M5.Lcd.drawLine(cx, cy, lastX, lastY, BLACK);
 
   // Calcola nuova posizione lancetta
-  int angleDeg = map((int)rpm, 0, maxValue, -90, 90);
+  int angleDeg = map((int)rpm, 0, maxValue, -225, 45);
   float rad    = angleDeg * PI / 180.0f;
   int nx = cx + cos(rad) * (radius - 15);
   int ny = cy + sin(rad) * (radius - 15);
@@ -1331,8 +1343,13 @@ void rpmScreen() {
 
   // Valore numerico al centro
   M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(WHITE, BLACK);
-  M5.Lcd.drawNumber(rpm, cx - 30, cy - 15);
+  if(rpm <= 3000)      M5.Lcd.setTextColor(GREEN, BLACK);
+  else if(rpm <= 4000) M5.Lcd.setTextColor(GREENYELLOW, BLACK);
+  else if(rpm <= 5000) M5.Lcd.setTextColor(YELLOW, BLACK);
+  else if(rpm <= 6000) M5.Lcd.setTextColor(ORANGE, BLACK);
+  else                 M5.Lcd.setTextColor(RED, BLACK);
+
+  M5.Lcd.drawNumber(rpm, cx - 30, cy + 70);
 }
 
 
