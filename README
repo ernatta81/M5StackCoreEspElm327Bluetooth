@@ -13,3 +13,7 @@ PID disponibili:
 
 Modificare la libreria M5Stack.cpp per utilizzare intrrupt sui tasti "B" e "C"
 Sul tasto "A" non è possibile utlizzare interrupt se si abilita il bluetooth
+
+
+24/09/2026:
+Test con Claude Opus 5.5 high
